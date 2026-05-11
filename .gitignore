@@ -10,4 +10,5 @@ dist/
 build/
 *.log
 .venv/
-chroma_db/
+chroma_db/ 
+.env
