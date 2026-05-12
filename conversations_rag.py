@@ -5,19 +5,33 @@ from langchain.chains import ConversationalRetrievalChain
 from langchain_community.chat_models import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from langchain.memory import ConversationBufferWindowMemory
-
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import (PyPDFLoader, TextLoader, Docx2txtLoader, CSVLoader)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from fastapi.responses import StreamingResponse
 from langchain.prompts import PromptTemplate
 from langchain_community.embeddings import DashScopeEmbeddings
-from fastapi import FastAPI
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 import os
 from dotenv import load_dotenv
+import asyncio
+import uuid
+import hashlib
+
+from prompts.hr_prompt import HR_PROMPT
 
 load_dotenv()
+os.makedirs("./docs", exist_ok=True)
+
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".txt",
+    ".docx",
+    ".csv"
+}
 
 # -----------------------
 # 2️⃣ Embedding + Vectorstore
@@ -31,8 +45,8 @@ embeddings = DashScopeEmbeddings(
 # documents = loader.load()
 
 # text_splitter = RecursiveCharacterTextSplitter(
-#     chunk_size=200,
-#     chunk_overlap=20
+#     chunk_size=300,
+#     chunk_overlap=30
 # )
 
 # split_docs = text_splitter.split_documents(documents)
@@ -44,15 +58,31 @@ embeddings = DashScopeEmbeddings(
 
 vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
 
-# 把向量库包装成“检索器（Retriever）”
-# 作用：给 LLM 提供语义检索接口
-retriever = vectorstore.as_retriever(search_kwargs={"k":3})  
-# 返回 top3 相似块
-# k=3 表示每次查询返回 最相似的 3 个文本块
-# 为什么要返回多个？
-# 避免单个块信息不足
-# 提高回答准确率
-# 返回的每个块都是之前 PDF 切片 + embedding 的文本
+def load_document(file_path):
+
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".pdf":
+        loader = PyPDFLoader(file_path)
+
+    elif ext == ".txt":
+        loader = TextLoader(
+            file_path,
+            encoding="utf-8"
+        )
+
+    elif ext == ".docx":
+        loader = Docx2txtLoader(file_path)
+
+    elif ext == ".csv":
+        loader = CSVLoader(file_path)
+
+    else:
+        raise ValueError(
+            f"不支持的文件类型: {ext}"
+        )
+
+    return loader.load()
 
 # -----------------------
 # 3️⃣ Memory 初始化
@@ -102,8 +132,9 @@ llm = ChatOpenAI(
     model="deepseek-chat",
     # 控制随机性：0=最严谨，1=最有创意
     temperature=0.3,
+    streaming=True,
     # 超时时间，避免卡死
-    timeout=60.0
+    timeout=60.0,
 )
 # RetrievalQA
 
@@ -134,34 +165,6 @@ Chain 是：
 # )
 
 MAX_DISTANCE = 1.2  # 向量距离阈值
-
-# 定义System Prompt
-prompt_template = """
-你是一个PDF问答助手。
-
-请根据提供的上下文回答问题。
-
-如果上下文中找不到答案，
-请明确回答：
-
-“文档中未找到相关信息”
-
-不要编造内容。
-
-上下文:
-{context}
-
-问题:
-{question}
-
-回答:
-"""
-
-# Chain 自动对context和question赋值
-QA_PROMPT = PromptTemplate(
-    template=prompt_template,
-    input_variables=["context", "question"]
-)
 
 # -----------------------
 # 5️⃣ FastAPI 初始化
@@ -216,6 +219,20 @@ async def ask(query: UserQuery):
     #         "chat_history": memory.load_memory_variables({}),
     #         "sources": docs_and_scores
     #     }
+    
+    # 把向量库包装成“检索器（Retriever）”
+    # 作用：给 LLM 提供语义检索接口
+    ## mmr避免重复chunk
+    retriever = vectorstore.as_retriever(
+        search_type="mmr", 
+        search_kwargs={ "k": 3, "fetch_k": 10, "filter": { "user_id": query.user_id } }
+    )
+    # 返回 top3 相似块
+    # k=3 表示每次查询返回 最相似的 3 个文本块
+    # 为什么要返回多个？
+    # 避免单个块信息不足
+    # 提高回答准确率
+    # 返回的每个块都是之前 PDF 切片 + embedding 的文本
 
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
@@ -224,7 +241,7 @@ async def ask(query: UserQuery):
         return_source_documents=True,
 
         combine_docs_chain_kwargs={
-            "prompt": QA_PROMPT
+            "prompt": HR_PROMPT
         }
     )
     # 调用 RAG
@@ -264,6 +281,174 @@ async def clear_memory(request: ClearUserMemory):
         return {"message": f"Memory for user {user_id} cleared."}
     else:
         return {"message": f"No memory found for user {user_id}."}
+
+@app.get("/llm_stream")
+async def llm_stream():
+
+    async def generate():
+
+        # 真正调用 LLM stream
+        for chunk in llm.stream("请简单介绍一下人工智能"):
+
+            # chunk 是 AI 返回的小块 token
+            content = chunk.content
+
+            if content:
+
+                print(content, end="", flush=True)
+
+                yield content
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain"
+    )
+
+@app.post("/chat_stream")
+async def chat_stream(query: UserQuery):
+
+    memory = get_user_memory(query.user_id)
+
+    retriever = vectorstore.as_retriever(
+        search_type="mmr", 
+        search_kwargs={ "k": 3, "fetch_k": 10, "filter": { "user_id": query.user_id } }
+    )
+
+    qa_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=retriever,
+        memory=memory,
+        return_source_documents=True,
+
+        combine_docs_chain_kwargs={
+            "prompt": HR_PROMPT
+        }
+    )
+    async def generate():
+
+        async for chunk in qa_chain.astream({
+            "question": query.question
+        }):
+            print(chunk)
+            if "answer" in chunk:
+                content = chunk["answer"]
+                if content:
+                    yield content
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain"
+    )
+
+@app.post("/sources_history")
+async def sources_history(query: UserQuery):
+    memory = get_user_memory(query.user_id)
+    history = memory.load_memory_variables({})
+    
+    sources = []
+
+    docs = vectorstore.similarity_search_with_score( query.question, k=3, filter={ "user_id": query.user_id } )    
+    for doc, score in docs:
+        sources.append({
+            "source":
+                doc.metadata.get("source"),
+            "page":
+                doc.metadata.get("page"),
+            "content":
+                doc.page_content[:200],
+            "filename":
+                doc.metadata.get("filename"),
+            "user_id":
+                doc.metadata.get("user_id"),
+            "score": 
+                f"{score:.2f}"
+        })
+
+    return {
+        "chat_history": history.get("chat_history", ""),
+        "sources": sources
+    }
+
+@app.post("/upload")
+async def upload(
+    user_id: str = Form(...),
+    file: UploadFile = File(...)
+    ):
+
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="文件名不能为空"
+        )
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {ext}"
+        )
+    
+    unique_name = f"{uuid.uuid4()}{ext}"
+
+    # 保存路径
+    save_path = os.path.join("./docs",unique_name)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail="上传文件为空"
+        )
+    
+    MAX_FILE_SIZE = 10 * 1024 * 1024
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail="文件不能超过10MB"
+        )
+    
+    file_hash = hashlib.md5(content).hexdigest()
+        
+    # 查询是否已存在 
+    existing = vectorstore.get( where={ "$and": [ { "file_hash": file_hash }, { "user_id": user_id } ] } )
+    if existing["ids"]:
+        raise HTTPException( 
+            status_code=400,
+            detail="该文件已上传"
+        )
+    
+    # 保存文件
+    with open(save_path, "wb") as f:
+        f.write(content)
+    
+    try:
+        docs = load_document(save_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"文档解析失败: {str(e)}"
+        )
+
+    # 保存原文件名
+    for doc in docs:
+        doc.metadata["filename"] = file.filename
+        doc.metadata["saved_filename"] = unique_name
+        doc.metadata['user_id'] = user_id
+        doc.metadata["file_hash"] = file_hash
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        separators=[ "\n\n", "\n", "。", "！", "？", "；", "，" ],
+        chunk_size=500,
+        chunk_overlap=50
+        )
+    split_docs = text_splitter.split_documents(docs)
+    vectorstore.add_documents(split_docs)
+
+    return {
+        "message": "上传成功",
+        "filename": file.filename,
+        "chunks": len(split_docs)
+    }
 
 # 启动 FastAPI 应用
 if __name__ == "__main__":  

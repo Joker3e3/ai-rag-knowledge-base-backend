@@ -10,7 +10,8 @@ ai-rag-demo/
 ├── README.md
 ├── requirements.txt
 ├── chroma_db/
-│   ├──
-│   └── 
-└── docs/
+│   └── chroma.sqlite3
+├── docs/
+└── prompts/
+    └── hr_prompt.py
 ```
