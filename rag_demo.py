@@ -46,7 +46,7 @@ split_docs = text_splitter.split_documents(documents)
 # )
 embeddings = DashScopeEmbeddings(
     model="text-embedding-v4",
-    dashscope_api_key=os.getenv("DASHSCOPE_API_KEYw")
+    dashscope_api_key=os.getenv("DASHSCOPE_API_KEY")
 )
 
 # 创建向量数据库
