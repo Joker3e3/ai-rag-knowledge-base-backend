@@ -450,6 +450,64 @@ async def upload(
         "chunks": len(split_docs)
     }
 
+@app.get("/documents")
+async def list_documents(user_id: str):
+
+    docs = vectorstore.get(
+        where={
+            "user_id": user_id
+        }
+    )
+    unique_files = {}
+    metadatas = docs["metadatas"]
+
+    for metadata in metadatas:
+
+        file_hash = metadata["file_hash"]
+        if file_hash not in unique_files:
+            unique_files[file_hash] = {
+                "filename": metadata["filename"],
+                "file_hash": file_hash
+            }
+
+    return list(unique_files.values())
+
+@app.delete("/delete_document")
+async def delete_document(user_id: str, file_hash: str):
+
+    docs = vectorstore.get( where={ "$and": [ { "file_hash": file_hash }, { "user_id": user_id } ] } )
+
+    if not docs["ids"]: 
+        raise HTTPException( status_code=404, detail="文档不存在" )
+    
+    metadatas = docs["metadatas"]
+
+    saved_filenames = set()
+
+    for metadata in metadatas:
+        saved_filename = metadata.get("saved_filename")
+        if saved_filename:
+            saved_filenames.add(saved_filename)
+
+
+    vectorstore.delete(
+        where={
+            "$and": [
+                { "user_id": user_id },
+                { "file_hash": file_hash }
+            ]
+        }
+    )
+
+    for saved_filename in saved_filenames:
+        file_path = os.path.join( "./docs", saved_filename )
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+    return {
+        "message": "文档已删除"
+    }
+
 # 启动 FastAPI 应用
 if __name__ == "__main__":  
     import uvicorn
