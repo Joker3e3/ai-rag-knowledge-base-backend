@@ -21,7 +21,10 @@ import asyncio
 import uuid
 import hashlib
 
+from utils.metadatas import build_metadata, validate_metadata
 from prompts.hr_prompt import HR_PROMPT
+from splitter.resume_splitter import split_resume_sections
+from splitter.chunk_splitter import split_chunks
 
 load_dotenv()
 os.makedirs("./docs", exist_ok=True)
@@ -40,21 +43,6 @@ embeddings = DashScopeEmbeddings(
     model="text-embedding-v4",
     dashscope_api_key=os.getenv("DASHSCOPE_API_KEY")
 )
-
-# loader = PyPDFLoader("./docs/test.pdf")
-# documents = loader.load()
-
-# text_splitter = RecursiveCharacterTextSplitter(
-#     chunk_size=300,
-#     chunk_overlap=30
-# )
-
-# split_docs = text_splitter.split_documents(documents)
-# vectorstore = Chroma.from_documents(
-#     documents=split_docs,
-#     embedding=embeddings,
-#     persist_directory="./chroma_db"
-# )
 
 vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
 
@@ -429,20 +417,36 @@ async def upload(
             detail=f"文档解析失败: {str(e)}"
         )
 
-    # 保存原文件名
+    # 文档级metadata
     for doc in docs:
         doc.metadata["filename"] = file.filename
         doc.metadata["saved_filename"] = unique_name
         doc.metadata['user_id'] = user_id
         doc.metadata["file_hash"] = file_hash
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        separators=[ "\n\n", "\n", "。", "！", "？", "；", "，" ],
-        chunk_size=500,
-        chunk_overlap=50
-        )
-    split_docs = text_splitter.split_documents(docs)
-    vectorstore.add_documents(split_docs)
+    # 进行按简历结构拆分
+    section_docs = split_resume_sections(docs)
+
+    # 按照 chunk_size 进行切分
+    split_docs = split_chunks(section_docs)
+
+    # 最终 metadata 标准化 
+    new_docs = [] 
+    for index, chunk in enumerate(split_docs):
+        metadata = build_metadata( 
+            user_id=chunk.metadata["user_id"], 
+            filename=chunk.metadata["filename"], 
+            saved_filename=chunk.metadata["saved_filename"],
+            file_hash=chunk.metadata["file_hash"], 
+            parent_id=chunk.metadata.get("parent_id"),
+            page=chunk.metadata.get("page", 0), 
+            section=chunk.metadata.get("section", "其他"), 
+            chunk_index=index 
+        ) 
+        chunk.metadata = metadata
+        new_docs.append(chunk)
+    
+    vectorstore.add_documents(new_docs)
 
     return {
         "message": "上传成功",
