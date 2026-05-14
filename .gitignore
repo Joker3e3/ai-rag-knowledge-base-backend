@@ -12,3 +12,4 @@ build/
 .venv/
 chroma_db/ 
 .env
+models/
