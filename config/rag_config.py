@@ -9,3 +9,4 @@ VECTOR_WEIGHT = 0.5  # 向量检索结果的权重
 COMPRESS_CONTEXT = (
     False  # 是否对检索到的文档进行压缩，提取与用户问题最相关的内容，减少上下文长度
 )
+REWRITE_QUERY = None  # 问题重写规则 None表示不重写，"rule"表示使用规则进行重写，"llm"表示使用LLM进行重写
