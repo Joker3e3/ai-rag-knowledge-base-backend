@@ -30,8 +30,8 @@ import hashlib
 
 from utils.metadatas import build_metadata, validate_metadata
 from prompts.hr_prompt import HR_PROMPT
-from splitter.resume_splitter import split_resume_sections
-from splitter.chunk_splitter import split_chunks
+from splitters.resume_splitter import split_resume_sections
+from splitters.chunk_splitter import split_chunks
 from retrievers.bm25_store import (
     rebuild_bm25_docs_from_chroma,
     add_docs_to_bm25,

@@ -17,22 +17,44 @@
 
 ```text
 ai-rag-demo/
-├── conversations_rag.py       # FastAPI 主服务：上传、问答、流式输出、文档管理
-├── main.py                    # DeepSeek Chat API 最小调用示例
-├── rag_demo.py                # 单 PDF 入库和基础检索示例
-├── test_fastapi.py            # FastAPI 最小接口测试示例
-├── requirements.txt           # Python 依赖
-├── README.md
-├── chroma_db/                 # Chroma 本地向量数据库目录
-├── docs/                      # 上传文档保存目录
+├── main.py                         # FastAPI 应用入口，挂载各业务路由
+├── conversations_rag.py            # 早期/备用 RAG 服务示例
+├── rag_demo.py                     # 单 PDF 入库与基础检索示例
+├── requirements.txt                # Python 依赖清单
+├── README.md                       # 项目说明文档
+├── .env                            # 本地环境变量，不提交到仓库
+├── config/
+│   └── rag_config.py               # RAG 参数、目录、召回和重排配置
+├── docs/                           # 上传文档保存目录
+├── chroma_db/                      # Chroma 本地向量数据库目录
+├── models/
+│   └── bge-reranker-v2-m3/         # 本地 reranker 模型文件
+├── loaders/
+│   └── document_loader.py          # 文档加载与解析逻辑
 ├── prompts/
-│   └── hr_prompt.py           # HR 简历问答 Prompt
-├── splitter/
-│   ├── chunk_splitter.py      # 通用 chunk 切分逻辑
-│   └── resume_splitter.py     # 简历 section 结构化拆分逻辑
+│   └── hr_prompt.py                # HR 简历问答 Prompt
+├── retrievers/
+│   ├── bm25_store.py               # BM25 内存索引管理
+│   ├── context_compressor.py       # 检索上下文压缩
+│   ├── custom_retriever.py         # 向量检索 + BM25 + rerank 混合检索器
+│   ├── query_rewriter.py           # 查询改写与扩展
+│   └── reranker.py                 # reranker 模型懒加载与结果重排
+├── routes/
+│   ├── admin_debug_routes.py       # 调试和管理接口
+│   ├── chat_routes.py              # 聊天、流式问答、来源历史接口
+│   └── document_routes.py          # 文档上传、查询、删除接口
+├── schemas/
+│   └── chat_schema.py              # 请求/响应数据结构
+├── services/
+│   ├── document_service.py         # 文档入库、删除、列表等业务逻辑
+│   ├── memory_service.py           # 用户会话记忆管理
+│   └── rag_service.py              # LLM、Embedding、Chroma 初始化
+├── splitters/
+│   ├── chunk_splitter.py           # 通用 chunk 切分逻辑
+│   └── resume_splitter.py          # 简历 section 结构化拆分逻辑
 └── utils/
-    ├── metadatas.py           # metadata 构建与校验
-    └── text_cleaner.py        # 文本标准化工具
+    ├── metadatas.py                # metadata 构建与校验
+    └── text_cleaner.py             # 文本标准化工具
 ```
 
 ## 环境准备

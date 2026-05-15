@@ -1,30 +1,35 @@
-from openai import OpenAI
-from dotenv import load_dotenv
-import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-# 加载环境变量
-load_dotenv()
+from routes.chat_routes import router as chat_router
+import uvicorn
 
-# 创建客户端
-client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url=os.getenv("DEEPSEEK_BASE_URL")
+from routes.document_routes import router as document_router
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# 调用模型
-response = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[
-        {
-            "role": "system",
-            "content": "你是一个AI助手"
-        },
-        {
-            "role": "user",
-            "content": "请解释什么是RAG"
-        }
-    ]
-)
+app.include_router(chat_router)
+app.include_router(document_router)
 
-# 输出结果
-print(response.choices[0].message.content)
+print("main.py 已加载")
+# 启动 FastAPI 应用
+if __name__ == "__main__":
+
+    print("准备启动 uvicorn")
+    import uvicorn
+
+    # uvicorn.run 启动开发服务器
+    # 参数：
+    # app → 当前文件中的 FastAPI app 实例
+    # host="0.0.0.0" → 允许外部访问
+    # port=8000 → 监听端口
+    # reload=False → 文件修改时不自动重启（生产模式用）
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
