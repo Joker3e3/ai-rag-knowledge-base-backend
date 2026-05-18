@@ -1,5 +1,5 @@
 # 处理文档上传、列出和删除的路由
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks
 
 from services.document_service import (
     upload_document,
@@ -11,8 +11,8 @@ router = APIRouter()
 
 
 @router.post("/upload")
-async def upload(user_id: str = Form(...), file: UploadFile = File(...)):
-    return await upload_document(user_id, file)
+async def upload(background_tasks: BackgroundTasks, user_id: str = Form(...), file: UploadFile = File(...)):
+    return await upload_document(background_tasks, user_id, file)
 
 
 @router.get("/documents")

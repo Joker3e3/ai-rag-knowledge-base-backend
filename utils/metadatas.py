@@ -23,6 +23,7 @@ def build_metadata(
     section="其他",
     chunk_index=0,
     document_type="resume",
+    document_status="processing",
 ):
     """构建写入 Chroma 的标准 metadata，保证后续能按用户和文件过滤。"""
     metadata = {
@@ -35,6 +36,7 @@ def build_metadata(
         "section": str(section),
         "chunk_index": int(chunk_index),
         "document_type": str(document_type),
+        "document_status": str(document_status)
     }
     validate_metadata(metadata) 
     return metadata
