@@ -13,3 +13,4 @@ build/
 chroma_db/ 
 .env
 models/
+docs/

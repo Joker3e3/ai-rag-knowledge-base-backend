@@ -1,0 +1,40 @@
+# Web API
+fastapi==0.111.1
+uvicorn[standard]==0.22.0
+python-multipart==0.0.28
+pydantic==2.13.4
+
+# LangChain / RAG
+langchain==0.3.25
+langchain-community==0.3.24
+langchain-core==0.3.86
+langchain-openai==0.3.17
+langchain-text-splitters==0.3.11
+langchain_dashscope==0.1.8
+chromadb==1.5.9
+rank-bm25==0.2.2
+
+# Model providers
+dashscope==1.25.17
+openai==1.109.1
+tiktoken==0.7.0
+
+# Document parsing
+pypdf==6.11.0
+docx2txt==0.9
+openpyxl==3.1.5
+pandas==3.0.3
+
+# Redis
+redis==7.0.1
+
+# Reranking
+FlagEmbedding==1.4.0
+sentence-transformers==3.1.1
+torch==2.12.0
+transformers==4.45.0
+tokenizers==0.20.3
+
+# Utilities
+python-dotenv==1.2.2
+requests==2.33.1
