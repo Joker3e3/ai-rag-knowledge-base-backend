@@ -5,12 +5,16 @@ from routes.chat_routes import router as chat_router
 import uvicorn
 
 from routes.document_routes import router as document_router
+from routes.tool_routes import router as tool_router
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -18,6 +22,7 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(document_router)
+app.include_router(tool_router)
 
 print("main.py 已加载")
 # 启动 FastAPI 应用
