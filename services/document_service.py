@@ -15,6 +15,7 @@ from retrievers.bm25_store import add_docs_to_bm25, remove_docs_from_bm25
 from config.rag_config import DOCS_DIR
 
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".docx", ".doc", ".csv", ".xlsx", ".xls"}
+VECTORSTORE_ADD_BATCH_SIZE = 10
 
 document_status_store = {}
 
@@ -63,6 +64,7 @@ async def upload_document(
         filename=file.filename,
         user_id=user_id,
         status="processing",
+        saved_filename=unique_name,
     )
     # document_status_store[file_hash] = {
     #     "filename": file.filename,
@@ -115,20 +117,37 @@ def process_document(save_path, user_id, filename, unique_name, file_hash):
 
             new_docs.append(new_doc)
 
-        vectorstore.add_documents(new_docs)
+        add_documents_to_vectorstore(new_docs)
+
         add_docs_to_bm25(new_docs)
 
         # document_status_store[file_hash]["status"] = "ready"
-        update_document_status(file_hash=file_hash, status="ready")
+        update_document_status(file_hash=file_hash, user_id=user_id, status="ready")
         print(f"{filename} 文档处理完成")
 
     except Exception as e:
 
-        update_document_status(file_hash=file_hash, status="failed", error=str(e))
+        cleanup_document_indexes(user_id, file_hash)
+        update_document_status(file_hash=file_hash, user_id=user_id, status="failed", error=str(e))
         # document_status_store[file_hash]["status"] = "failed"
         # document_status_store[file_hash]["error"] = str(e)
 
         print(f"{filename} 文档处理失败: {str(e)}")
+
+
+def add_documents_to_vectorstore(docs):
+    for start in range(0, len(docs), VECTORSTORE_ADD_BATCH_SIZE):
+        batch = docs[start:start + VECTORSTORE_ADD_BATCH_SIZE]
+        vectorstore.add_documents(batch)
+
+
+def cleanup_document_indexes(user_id, file_hash):
+    try:
+        vectorstore.delete(where={"$and": [{"file_hash": file_hash}, {"user_id": user_id}]})
+    except Exception as e:
+        print(f"cleanup chroma failed for {file_hash}: {str(e)}")
+
+    remove_docs_from_bm25(user_id, file_hash)
 
 
 def list_documents(user_id: str):
@@ -186,65 +205,116 @@ def delete_document_by_hash(user_id: str, file_hash: str):
         where={"$and": [{"file_hash": file_hash}, {"user_id": user_id}]}
     )
 
-    if not docs["ids"]:
-        raise HTTPException(status_code=404, detail="文档不存在")
+    if docs["ids"]:
+        saved_filenames = set()
 
-    saved_filenames = set()
+        for metadata in docs["metadatas"]:
+            saved_filename = metadata.get("saved_filename")
 
-    for metadata in docs["metadatas"]:
-        saved_filename = metadata.get("saved_filename")
+            if saved_filename:
+                saved_filenames.add(saved_filename)
+
+        status = get_document_status(file_hash, user_id)
+        saved_filename = status.get("saved_filename")
 
         if saved_filename:
             saved_filenames.add(saved_filename)
 
-    vectorstore.delete(where={"$and": [{"user_id": user_id}, {"file_hash": file_hash}]})
+        cleanup_document_indexes(user_id, file_hash)
+        delete_document_status(file_hash, user_id)
+        delete_saved_files(saved_filenames)
 
-    remove_docs_from_bm25(user_id, file_hash)
-    delete_document_status(file_hash)
-    # document_status_store.pop(file_hash, "")
+        return {"message": "文档已删除"}
 
-    for saved_filename in saved_filenames:
-        file_path = os.path.join(DOCS_DIR, saved_filename)
+    status = get_document_status(file_hash, user_id)
 
-        if os.path.exists(file_path):
-            os.remove(file_path)
+    if not status or status.get("user_id") != user_id or status.get("status") != "failed":
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    saved_filenames = set()
+    saved_filename = status.get("saved_filename")
+
+    if saved_filename:
+        saved_filenames.add(saved_filename)
+    else:
+        saved_filenames.update(find_unreferenced_saved_files_by_hash(file_hash))
+
+    cleanup_document_indexes(user_id, file_hash)
+    delete_document_status(file_hash, user_id)
+    delete_saved_files(saved_filenames)
 
     return {"message": "文档已删除"}
-
 
 """
 Redis文档状态管理
 """
 
 
-def set_document_status(file_hash, filename, user_id, status, error=None):
-    redis_client.hset(
-        f"document:{file_hash}",
-        mapping={
-            "file_hash": file_hash,
-            "filename": filename,
-            "user_id": user_id,
-            "status": status,
-            "error": error or "",
-        },
-    )
+def get_document_status_key(file_hash, user_id=None):
+    if user_id:
+        return f"document:{user_id}:{file_hash}"
+
+    return f"document:{file_hash}"
 
 
-def get_document_status(file_hash):
-    return redis_client.hgetall(f"document:{file_hash}")
+def set_document_status(file_hash, filename, user_id, status, error=None, saved_filename=None):
+    mapping = {
+        "file_hash": file_hash,
+        "filename": filename,
+        "user_id": user_id,
+        "status": status,
+        "error": error or "",
+    }
+
+    if saved_filename:
+        mapping["saved_filename"] = saved_filename
+
+    redis_client.hset(get_document_status_key(file_hash, user_id), mapping=mapping)
+
+    legacy_status = get_document_status(file_hash)
+
+    if legacy_status and legacy_status.get("user_id") == user_id:
+        redis_client.delete(get_document_status_key(file_hash))
+
+def get_document_status(file_hash, user_id=None):
+    if user_id:
+        data = redis_client.hgetall(get_document_status_key(file_hash, user_id))
+
+        if data:
+            return data
+
+    return redis_client.hgetall(get_document_status_key(file_hash))
 
 
-def update_document_status(file_hash, status, error=None):
+def update_document_status(file_hash, status, error=None, user_id=None):
     mapping = {"status": status}
 
     if error:
         mapping["error"] = error
 
-    redis_client.hset(f"document:{file_hash}", mapping=mapping)
+    status_key = get_document_status_key(file_hash, user_id)
+
+    if user_id and not redis_client.exists(status_key):
+        legacy_status = get_document_status(file_hash)
+
+        if legacy_status and legacy_status.get("user_id") == user_id:
+            status_key = get_document_status_key(file_hash)
+
+    redis_client.hset(status_key, mapping=mapping)
 
 
-def delete_document_status(file_hash):
-    redis_client.delete(f"document:{file_hash}")
+def delete_document_status(file_hash, user_id=None):
+    if user_id:
+        redis_client.delete(get_document_status_key(file_hash, user_id))
+
+        legacy_status = get_document_status(file_hash)
+
+        if legacy_status and legacy_status.get("user_id") == user_id:
+            redis_client.delete(get_document_status_key(file_hash))
+
+        return
+
+    redis_client.delete(get_document_status_key(file_hash))
 
 
 def get_all_document_status():
@@ -261,3 +331,61 @@ def get_all_document_status():
             results.append(data)
 
     return results
+
+
+def delete_saved_files(saved_filenames):
+    for saved_filename in saved_filenames:
+        file_path = os.path.join(DOCS_DIR, os.path.basename(saved_filename))
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+
+def get_referenced_saved_filenames(file_hash):
+    docs = vectorstore.get(where={"file_hash": file_hash})
+    saved_filenames = set()
+
+    for metadata in docs.get("metadatas", []):
+        saved_filename = metadata.get("saved_filename")
+
+        if saved_filename:
+            saved_filenames.add(saved_filename)
+
+    return saved_filenames
+
+
+def calculate_file_md5(file_path):
+    file_md5 = hashlib.md5()
+
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            file_md5.update(chunk)
+
+    return file_md5.hexdigest()
+
+
+def find_unreferenced_saved_files_by_hash(file_hash):
+    if not os.path.isdir(DOCS_DIR):
+        return set()
+
+    referenced_saved_filenames = get_referenced_saved_filenames(file_hash)
+    saved_filenames = set()
+
+    for saved_filename in os.listdir(DOCS_DIR):
+        if saved_filename in referenced_saved_filenames:
+            continue
+
+        file_path = os.path.join(DOCS_DIR, saved_filename)
+
+        if not os.path.isfile(file_path):
+            continue
+
+        try:
+            if calculate_file_md5(file_path) == file_hash:
+                saved_filenames.add(saved_filename)
+        except OSError:
+            continue
+
+    return saved_filenames
+
+
