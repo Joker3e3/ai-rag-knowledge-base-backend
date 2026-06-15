@@ -59,6 +59,26 @@ def get_user_bm25_retriever(user_id, k=3):
 
     return retriever
 
+def get_resume_bm25_retriever(user_id, candidate_id, resume_id, k=3):
+    """
+    根据 candidate_id + resume_id 构建 BM25Retriever
+    """
+
+    resume_docs = [
+        doc for doc in bm25_docs
+        if doc.metadata.get("user_id") == user_id
+        and doc.metadata.get("candidate_id") == candidate_id
+        and doc.metadata.get("resume_id") == resume_id
+    ]
+
+    if not resume_docs:
+        return None
+
+    retriever = BM25Retriever.from_documents(resume_docs)
+    retriever.k = k
+
+    return retriever
+
 def remove_docs_from_bm25(user_id, file_hash):
     """
     删除文件后，把对应的 chunk 从 BM25 内存池中移除。

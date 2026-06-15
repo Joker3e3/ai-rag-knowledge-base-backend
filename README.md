@@ -138,6 +138,7 @@ ChromaDB / Embedding / Retrieval
 - Source Documents 返回：`/sources_history` 返回 page、section、chunk_index、parent_id、rerank_score 等信息。
 - `user_id` 文档隔离：检索阶段通过 Chroma metadata filter 和用户级 BM25 docs 做隔离。
 - Redis 文档状态：上传后先返回 `processing`，后台处理完成后更新为 `ready` 或 `failed`。
+- 候选人简历标记：处理简历时会先根据文件名解析候选人姓名、学校和手机号，作为候选人标签参与后续 metadata 与 PostgreSQL 记录生成。
 - Evidence retrieval API：`/retrieve_evidence` 供 Agent 后端检索候选证据。
 
 ## 6. Tech Stack / 技术栈
@@ -161,6 +162,7 @@ RAG / AI:
 State / Storage:
 
 - Redis
+- PostgreSQL
 - Local `docs/` upload directory
 - Local ChromaDB directory `chroma_db/`
 - In-memory conversation buffer and BM25 index rebuilt from Chroma at startup
@@ -186,6 +188,10 @@ ai-rag-knowledge-base-backend/
 |-- requirements-prod.txt
 |-- config/
 |   `-- rag_config.py
+|-- database/
+|   |-- database.py
+|   |-- init_db.py
+|   `-- models/
 |-- routes/
 |   |-- chat_routes.py
 |   |-- document_routes.py
@@ -226,6 +232,7 @@ ai-rag-knowledge-base-backend/
 - Section-aware chunking: `splitters/resume_splitter.py`。
 - Recursive chunking: `splitters/chunk_splitter.py`。
 - Embedding / vector store: `services/rag_service.py`。
+- PostgreSQL 连接与建表: `database/database.py`、`database/init_db.py`。
 - 文档上传、去重、入库、删除: `services/document_service.py`。
 - Hybrid retrieval / rerank: `retrievers/custom_retriever.py`、`retrievers/bm25_store.py`、`retrievers/reranker.py`。
 - Redis 状态管理: `services/redis_service.py` 和 `services/document_service.py` 中的 document status helpers。
@@ -251,6 +258,7 @@ cp .env.example .env
 DASHSCOPE_API_KEY=your_dashscope_api_key
 DEEPSEEK_API_KEY=your_deepseek_api_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
+DATABASE_URL=postgresql+psycopg2://postgres:password@localhost:5432/rag_db
 REDIS_HOST=localhost
 REDIS_PORT=6379
 ````
@@ -261,6 +269,8 @@ Docker Compose 启动时，`REDIS_HOST` 应配置为 Compose service name：
 REDIS_HOST=redis
 REDIS_PORT=6379
 ```
+
+PostgreSQL 当前不在本仓库的 `docker-compose.yml` 中启动，需要先准备好可连接的 PG 实例，并在 `.env` 中配置 `DATABASE_URL`。
 
 ### 准备本地 Reranker 模型
 
@@ -274,7 +284,17 @@ models/bge-reranker-v2-m3/
 
 未准备模型时，Reranker 功能将无法正常工作。
 
-### 8.3 Docker Compose start
+### 8.3 初始化 PostgreSQL 表
+
+首次运行或清空数据库后，执行下面的脚本创建当前 RAG 后端需要的 PG 表：
+
+```bash
+python -m database.init_db
+```
+
+该脚本会注册 `Candidate`、`Resume` 两个 SQLAlchemy model，并通过 `Base.metadata.create_all(bind=engine)` 创建 `candidate` 和 `resume` 表。
+
+### 8.4 Docker Compose start
 
 ```bash
 docker compose up -d --build
@@ -298,7 +318,7 @@ docker compose logs -f backend
 http://localhost:8000/docs
 ```
 
-### 8.4 Local Python start
+### 8.5 Local Python start
 
 ```bash
 pip install -r requirements.txt
@@ -312,7 +332,7 @@ python main.py
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 8.5 与前端、Agent 后端联调
+### 8.6 与前端、Agent 后端联调
 
 Agent Backend `.env` 中配置：
 
@@ -344,6 +364,7 @@ VITE_AGENT_API_BASE_URL=http://localhost:8001
 | `DASHSCOPE_API_KEY` | Yes      | DashScope embedding API key，用于 `text-embedding-v4`。       |
 | `DEEPSEEK_API_KEY`  | Yes      | LLM API key。                                                 |
 | `DEEPSEEK_BASE_URL` | Yes      | OpenAI-compatible LLM base URL。                              |
+| `DATABASE_URL`      | Yes      | PostgreSQL connection URL，用于保存候选人和简历记录。         |
 | `REDIS_HOST`        | No       | Redis host，默认 `localhost`；Docker Compose 中使用 `redis`。 |
 | `REDIS_PORT`        | No       | Redis port，默认 `6379`。                                     |
 
@@ -504,6 +525,22 @@ RAG 输出需要可解释和可核查。返回来源文档、页码、section、
 ### 11.6 为什么用 metadata filter 做 user_id 隔离
 
 个人项目中采用轻量方式实现用户级文档隔离：每个 chunk 写入 `user_id`，检索时使用 metadata filter 和用户级 BM25 文档池，避免跨用户文档污染。它不是完整企业级权限系统。
+
+### 11.7 为什么先从简历文件名打候选人标签
+
+当前简历上传会先从文件名解析候选人基础信息，约定格式为：
+
+```text
+姓名_学校_手机号.<ext>
+```
+
+例如：
+
+```text
+张三_山东大学_13812345678.pdf
+```
+
+解析出的姓名、学校、手机号会先作为文档处理链路中的候选人标签，用于生成 `candidate_id` 和 `resume_id`。其中候选人详情会写入 PostgreSQL 的 `candidate` / `resume` 表，候选人和简历相关 ID 会写入 Chroma metadata，方便后续按候选人或简历维度检索与追踪。当前手机号按中国大陆手机号格式校验。
 
 ## 12. Demo Screenshots
 

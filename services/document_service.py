@@ -1,10 +1,15 @@
+import json
 import os
+import re
 import uuid
 import hashlib
 
 from fastapi import UploadFile, HTTPException, BackgroundTasks
 from langchain.schema import Document
 
+from database.database import SessionLocal
+from database.models.candidate import Candidate
+from database.models.resume import Resume
 from services.rag_service import vectorstore
 from services.redis_service import redis_client
 from loaders.document_loader import load_document
@@ -19,6 +24,41 @@ VECTORSTORE_ADD_BATCH_SIZE = 10
 
 document_status_store = {}
 
+def parse_candidate_info_from_filename(filename: str) -> dict:
+    """
+    通过解析文件名获取候选人信息，要求文件名格式为：姓名_学校_手机号.pdf
+    例如：张三_山东大学_13812345678.pdf
+    """
+    name_without_ext = os.path.splitext(filename)[0]
+    parts = name_without_ext.split("_")
+
+    if len(parts) != 3:
+        raise HTTPException(
+            status_code=400,
+            detail="文件名格式错误，请使用：姓名_学校_手机号.pdf，例如：张三_山东大学_13812345678.pdf",
+        )
+
+    candidate_name = parts[0].strip()
+    school = parts[1].strip()
+    phone = parts[2].strip()
+
+    if not candidate_name or not school or not phone:
+        raise HTTPException(
+            status_code=400,
+            detail="文件名中的姓名、学校、手机号不能为空",
+        )
+
+    if not re.fullmatch(r"1[3-9]\d{9}", phone):
+        raise HTTPException(
+            status_code=400,
+            detail="手机号格式错误，请使用11位中国大陆手机号",
+        )
+
+    return {
+        "candidate_name": candidate_name,
+        "school": school,
+        "phone": phone,
+    }
 
 async def upload_document(
     background_tasks: BackgroundTasks, user_id: str, file: UploadFile
@@ -30,6 +70,8 @@ async def upload_document(
 
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}")
+
+    candidate_info = parse_candidate_info_from_filename(file.filename)
 
     content = await file.read()
 
@@ -74,7 +116,7 @@ async def upload_document(
     # }
 
     background_tasks.add_task(
-        process_document, save_path, user_id, file.filename, unique_name, file_hash
+        process_document, save_path, user_id, file.filename, unique_name, file_hash, candidate_info
     )
 
     return {
@@ -84,15 +126,30 @@ async def upload_document(
     }
 
 
-def process_document(save_path, user_id, filename, unique_name, file_hash):
+def process_document(save_path, user_id, filename, unique_name, file_hash, candidate_info):
     try:
         docs = load_document(save_path)
+
+        candidate_name = candidate_info["candidate_name"]
+        school = candidate_info["school"]
+        phone = candidate_info["phone"]
+
+        candidate_identity = f"{user_id}:{candidate_name}:{school}:{phone}"
+        candidate_id = hashlib.md5(candidate_identity.encode("utf-8")).hexdigest()
+
+        resume_id = str(uuid.uuid4())
 
         for doc in docs:
             doc.metadata["filename"] = filename
             doc.metadata["saved_filename"] = unique_name
             doc.metadata["user_id"] = user_id
             doc.metadata["file_hash"] = file_hash
+            doc.metadata["candidate_id"] = candidate_id
+            doc.metadata["resume_id"] = resume_id
+            doc.metadata["candidate_name"] = candidate_name
+            doc.metadata["school"] = school
+            doc.metadata["phone"] = phone
+            doc.metadata["is_latest"] = True
 
         section_docs = split_resume_sections(docs)
         split_docs = split_chunks(section_docs)
@@ -111,11 +168,49 @@ def process_document(save_path, user_id, filename, unique_name, file_hash):
                 parent_id=chunk.metadata.get("parent_id"),
                 chunk_index=index,
                 document_status="ready",
+
+                candidate_id=chunk.metadata["candidate_id"],
+                resume_id=chunk.metadata["resume_id"],
             )
 
             new_doc = Document(page_content=chunk.page_content, metadata=metadata)
 
             new_docs.append(new_doc)
+
+        db = SessionLocal()
+
+        try:
+            existing = db.query(Candidate).filter(
+                Candidate.candidate_id == candidate_id
+            ).first()
+
+            if not existing:
+                candidate = Candidate(
+                    candidate_id=candidate_id,
+                    user_id=user_id,
+                    name=candidate_name,
+                    school=school,
+                    phone=phone
+                )
+
+                db.add(candidate)
+
+            db.query(Resume).filter(
+                Resume.candidate_id == candidate_id
+            ).update({"is_latest": False})
+            resume = Resume(
+                resume_id=resume_id,
+                candidate_id=candidate_id,
+                file_name=filename,
+                file_hash=file_hash,
+                is_latest=True
+            )
+
+            db.add(resume)
+            db.commit()
+
+        finally:
+            db.close()
 
         add_documents_to_vectorstore(new_docs)
 

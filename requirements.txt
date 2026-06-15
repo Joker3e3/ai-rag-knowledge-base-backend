@@ -19,6 +19,9 @@ dashscope==1.25.17
 openai==1.109.1
 tiktoken==0.7.0
 
+sqlalchemy==2.0.50
+psycopg2-binary==2.9.12
+
 # Document parsing
 pypdf==6.11.0
 

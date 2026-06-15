@@ -10,6 +10,8 @@ REQUIRED_METADATA_FIELDS = [
     "section",
     "chunk_index",
     "document_type",
+    "candidate_id",
+    "resume_id",
 ]
 
 
@@ -19,6 +21,8 @@ def build_metadata(
     saved_filename,
     file_hash,
     parent_id,
+    candidate_id,
+    resume_id,
     page=0,
     section="其他",
     chunk_index=0,
@@ -28,6 +32,8 @@ def build_metadata(
     """构建写入 Chroma 的标准 metadata，保证后续能按用户和文件过滤。"""
     metadata = {
         "user_id": str(user_id),
+        "candidate_id": str(candidate_id),
+        "resume_id": str(resume_id),
         "filename": str(filename),
         "saved_filename": str(saved_filename),
         "file_hash": str(file_hash),
@@ -73,5 +79,11 @@ def validate_metadata(metadata):
     
     if not isinstance(metadata["document_type"], str): 
         raise TypeError("document_type 必须是字符串") 
+    
+    if not isinstance(metadata["candidate_id"], str):
+        raise TypeError("candidate_id 必须是字符串")
+
+    if not isinstance(metadata["resume_id"], str):
+        raise TypeError("resume_id 必须是字符串")
     
     return True

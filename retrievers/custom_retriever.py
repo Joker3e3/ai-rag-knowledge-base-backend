@@ -6,7 +6,7 @@ from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
-from retrievers.bm25_store import get_user_bm25_retriever
+from retrievers.bm25_store import get_resume_bm25_retriever, get_user_bm25_retriever
 from retrievers.context_compressor import compress_documents
 from retrievers.query_rewriter import rewrite_search_query
 from retrievers.reranker import rerank_documents
@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 class CustomRerankRetriever(BaseRetriever):
     vectorstore: Any
     user_id: str
+    candidate_id: str | None = None
+    resume_id: str | None = None
+
     bm25_weight: float
     vector_weight: float
 
@@ -39,22 +42,39 @@ class CustomRerankRetriever(BaseRetriever):
 
         search_query = rewrite_search_query(self.llm, query, self.rewrite_query)
 
+        if self.candidate_id and self.resume_id:
+            filters = {
+                "$and": [
+                    {"user_id": self.user_id},
+                    {"candidate_id": self.candidate_id},
+                    {"resume_id": self.resume_id},
+                ]
+            }
+        else:
+            filters = {"user_id": self.user_id}
+            
         vector_retriever = self.vectorstore.as_retriever(
             search_kwargs={
                 "k": self.recall_k,
-                "filter": {
-                    "user_id": self.user_id,
-                },
+                "filter": filters,
             },
         )
 
         bm25_start = new_timer()
         bm25_docs = []
         try:
-            bm25_retriever = get_user_bm25_retriever(
-                self.user_id,
-                k=self.recall_k,
-            )
+            if self.candidate_id and self.resume_id:
+                bm25_retriever = get_resume_bm25_retriever(
+                    self.user_id,
+                    self.candidate_id,
+                    self.resume_id,
+                    k=self.recall_k,
+                )
+            else:
+                bm25_retriever = get_user_bm25_retriever(
+                    self.user_id,
+                    k=self.recall_k,
+                )
 
             if bm25_retriever:
                 bm25_docs = bm25_retriever.invoke(search_query)
