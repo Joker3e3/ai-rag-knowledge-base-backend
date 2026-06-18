@@ -7,7 +7,16 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(DATABASE_URL, echo=False)
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not configured")
+
+engine = create_engine(
+    DATABASE_URL, 
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    pool_timeout=30,
+    echo=False
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,
