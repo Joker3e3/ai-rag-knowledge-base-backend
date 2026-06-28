@@ -1,20 +1,41 @@
-"""
-# 配置文件，定义RAG系统中的一些参数
-"""
+import os
 
-CHUNK_SIZE = 500  # 文本切分的块大小，单位为字符
-CHUNK_OVERLAP = 50  # 文本切分时块之间的重叠部分大小，单位为字符，确保上下文连续性
+from dotenv import load_dotenv
 
-RECALL_K = 10  # 检索时返回的文档数量
-RERANK_TOP_K = 3  # 重新排序时返回的文档数量
 
-BM25_WEIGHT = 0.5  # BM25检索结果的权重
-VECTOR_WEIGHT = 0.5  # 向量检索结果的权重
+load_dotenv()
 
-COMPRESS_CONTEXT = (
-    False  # 是否对检索到的文档进行压缩，提取与用户问题最相关的内容，减少上下文长度
-)
-REWRITE_QUERY = None  # 问题重写规则 None表示不重写，"rule"表示使用规则进行重写，"llm"表示使用LLM进行重写
 
-DOCS_DIR = "./docs" # 存放文档的目录，RAG系统将从这个目录中加载文档进行处理
-CHROMA_DIR = "./chroma_db" # ChromaDB的存储目录
+def _parse_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+
+    raise ValueError(
+        f"{name} must be one of true/false, 1/0, yes/no, or on/off; got {value!r}"
+    )
+
+
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
+
+RECALL_K = 10
+RERANK_TOP_K = 3
+# Benchmark switch for CPU/scoped retrieval A/B tests. Keep enabled by default
+# so production behavior remains unchanged unless RERANK_ENABLED=false is set.
+RERANK_ENABLED = _parse_bool_env("RERANK_ENABLED", True)
+
+BM25_WEIGHT = 0.5
+VECTOR_WEIGHT = 0.5
+
+COMPRESS_CONTEXT = False
+REWRITE_QUERY = None
+
+DOCS_DIR = "./docs"
+CHROMA_DIR = "./chroma_db"

@@ -6,6 +6,7 @@ from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
+from config.rag_config import RERANK_ENABLED
 from retrievers.bm25_store import get_resume_bm25_retriever, get_user_bm25_retriever
 from retrievers.context_compressor import compress_documents
 from retrievers.query_rewriter import rewrite_search_query
@@ -27,6 +28,7 @@ class CustomRerankRetriever(BaseRetriever):
 
     recall_k: int
     rerank_top_k: int
+    rerank_enabled: bool = RERANK_ENABLED
 
     llm: Any
 
@@ -62,6 +64,7 @@ class CustomRerankRetriever(BaseRetriever):
 
         bm25_start = new_timer()
         bm25_docs = []
+        bm25_retriever = None
         try:
             if self.candidate_id and self.resume_id:
                 bm25_retriever = get_resume_bm25_retriever(
@@ -110,20 +113,50 @@ class CustomRerankRetriever(BaseRetriever):
             log_rag_timing(logger, request_id, "hybrid_merge", merge_start)
 
         rerank_start = new_timer()
-        try:
-            reranked_docs = rerank_documents(
-                query,
-                docs,
-                top_k=self.rerank_top_k,
+        if self.rerank_enabled:
+            try:
+                reranked_docs = rerank_documents(
+                    query,
+                    docs,
+                    top_k=self.rerank_top_k,
+                )
+            finally:
+                log_rag_timing(logger, request_id, "rerank", rerank_start)
+
+            final_docs = []
+
+            for doc, score in reranked_docs:
+                doc.metadata["rerank_score"] = float(score)
+                final_docs.append(doc)
+        else:
+            # Benchmark mode: keep BM25 + vector + hybrid merge, but skip the
+            # CPU reranker to compare latency and evidence quality directly.
+            final_docs = docs[: self.rerank_top_k]
+            for doc in final_docs:
+                doc.metadata["rerank_score"] = None
+                doc.metadata["rerank_enabled"] = False
+
+            log_rag_timing(
+                logger,
+                request_id,
+                "rerank_skipped",
+                duration_ms_value=0.0,
+                reason="RERANK_ENABLED_FALSE",
             )
-        finally:
-            log_rag_timing(logger, request_id, "rerank", rerank_start)
 
-        final_docs = []
-
-        for doc, score in reranked_docs:
-            doc.metadata["rerank_score"] = float(score)
-            final_docs.append(doc)
+        logger.info(
+            (
+                "[RAG_REQUEST] request_id=%s rerank_enabled=%s recall_k=%s "
+                "rerank_top_k=%s candidate_count_before_rerank=%s "
+                "final_result_count=%s"
+            ),
+            request_id,
+            self.rerank_enabled,
+            self.recall_k,
+            self.rerank_top_k,
+            len(docs),
+            len(final_docs),
+        )
 
         if self.compress_context:
             compressed_docs = compress_documents(

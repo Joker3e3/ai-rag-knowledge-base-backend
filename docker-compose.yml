@@ -2,6 +2,8 @@ services:
   redis:
     image: redis:8.6.3
     container_name: ai-rag-redis
+    environment:
+      - TZ=Asia/Shanghai
     ports:
       - "6379:6379"
     volumes:
@@ -16,6 +18,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - TZ=Asia/Shanghai
     volumes:
       - ./docs:/app/docs
       - ./chroma_db:/app/chroma_db

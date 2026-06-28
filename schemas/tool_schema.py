@@ -6,3 +6,4 @@ class ToolQuery(BaseModel):
     candidate_id: str
     resume_id: str
     question: str
+    rerank_enabled: bool | None = None

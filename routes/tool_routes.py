@@ -8,6 +8,7 @@ from config.rag_config import (
     BM25_WEIGHT,
     COMPRESS_CONTEXT,
     RECALL_K,
+    RERANK_ENABLED,
     RERANK_TOP_K,
     VECTOR_WEIGHT,
 )
@@ -29,6 +30,19 @@ def retrieve_evidence(query: ToolQuery):
     request_id = uuid.uuid4().hex[:8]
     total_start = new_timer()
 
+    effective_rerank_enabled = (
+        query.rerank_enabled
+        if query.rerank_enabled is not None
+        else RERANK_ENABLED
+    )
+
+    logger.info(
+        "[RAG_CONFIG] request_id=%s rerank_enabled=%s rerank_source=%s",
+        request_id,
+        effective_rerank_enabled,
+        "request_override" if query.rerank_enabled is not None else "env_default",
+    )
+
     retriever = CustomRerankRetriever(
         vectorstore=vectorstore,
         user_id=query.user_id,
@@ -37,6 +51,7 @@ def retrieve_evidence(query: ToolQuery):
         llm=llm,
         recall_k=RECALL_K,
         rerank_top_k=RERANK_TOP_K,
+        rerank_enabled=effective_rerank_enabled,
         bm25_weight=BM25_WEIGHT,
         vector_weight=VECTOR_WEIGHT,
         compress_context=COMPRESS_CONTEXT,
